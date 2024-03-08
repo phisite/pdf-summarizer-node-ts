@@ -1,6 +1,9 @@
 import ollama from "ollama";
 import prompts from "prompts";
 import argv from "yargs";
+import PDFParser from "pdf2json";
+import fs from "fs/promises";
+import path from "path";
 
 prompts.override(argv);
 
@@ -19,25 +22,54 @@ const modelSelected = await prompts({
   initial: 0,
 });
 
-console.log(modelSelected.model);
+const allFiles = await fs.readdir("./files");
+const pdfs = allFiles.filter(
+  (file) => path.extname(file).toLowerCase() === ".pdf"
+);
 
-const examplePrompt = await prompts({
-  type: "text",
-  name: "value",
-  message: "Hello, I'm a friendly assistant! Ask me anything.",
-  initial: "What is the capital of France?",
+const choices = pdfs.map((pdf) => ({ title: pdf, value: pdf }));
+
+const pdfSelected = await prompts({
+  type: "select",
+  name: "pdf",
+  message: "Which PDF would you like to summarize?",
+  choices,
 });
 
+interface PatchedPDFParser extends PDFParser {
+  getRawTextContent: () => string;
+}
+
+const filename = `./files/${pdfSelected.pdf}`;
+
+const parse = (filename: string) => {
+  return new Promise((resolve, reject) => {
+    const pdfParser = new PDFParser(undefined, 1) as PatchedPDFParser;
+    pdfParser.on("pdfParser_dataReady", (_pdfData) => {
+      try {
+        const data = pdfParser.getRawTextContent();
+        resolve(data);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    pdfParser.on("pdfParser_dataError", (errData) => reject(errData));
+    pdfParser.loadPDF(filename);
+  });
+};
+
+const text = await parse(filename);
+
 const response = await ollama.chat({
-  model: "dolphin-phi",
+  model: modelSelected.model,
   messages: [
     {
       role: "system",
-      content: "Hello, I'm a friendly assistant! Ask me anything.",
+      content: "Summarize the following PDF document in 3 sentences or less.",
     },
     {
       role: "user",
-      content: examplePrompt.value,
+      content: "PDF content:\n" + text,
     },
   ],
 });
